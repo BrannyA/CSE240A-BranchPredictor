@@ -24,9 +24,10 @@ const char *email       = "EMAIL";
 const char *bpName[4] = { "Static", "Gshare",
                           "Tournament", "Custom" };
 
-int ghistoryBits; // Number of bits used for Global History, for gshare and tour lobal
+int ghistoryBits; // Number of bits used for Global History, for gshare, tournament
 int lhistoryBits; // Number of bits used for Local History, for tour P1 simple BHT
-int pcIndexBits;  // Number of bits used for PC index, for counter and tour P2 correlation
+int pcIndexBits;  // Number of bits used for PC index, for counter and tour P2 correlation, and custon
+int choiceBits;   // Number of bits used for PC index, for custom
 int bpType;       // Branch Prediction Type
 int verbose;
 
@@ -42,7 +43,13 @@ uint8_t *localCounter;     // P2, local
 uint8_t *chooser;          // 0| 1| 2| 3, each time plus (P1 correct - P2 correct)
 uint8_t globalPred, localPred;  // gloabal and local prediction results
 
-// custom global
+// custom global, bi - mode
+uint32_t bimodeHistory;
+uint8_t *directionBHT1;
+uint8_t *directionBHT2;
+uint8_t *choiceTable;
+uint8_t pred1, pred2; 
+uint8_t choosed;
 
 
 //------------------------------------//
@@ -69,7 +76,14 @@ void init_tournament(){
 }
 
 void init_custom(){
-
+  bimodeHistory = 0;
+  directionBHT1 = malloc((1 << pcIndexBits) * sizeof(uint8_t));
+  directionBHT2 = malloc((1 << pcIndexBits) * sizeof(uint8_t));
+  choiceTable   = malloc((1 << choiceBits ) * sizeof(uint8_t));
+  memset(directionBHT1, WN , (1 << pcIndexBits) * sizeof(uint8_t));
+  memset(directionBHT2, WN , (1 << pcIndexBits) * sizeof(uint8_t));
+  memset(choiceTable  , 1  , (1 << choiceBits ) * sizeof(uint8_t));  // 0, 1, 2, 3
+  // printf("info custom: %d, %d\n", pcIndexBits, choiceBits);
 }
 
 // Initialize the predictor
@@ -130,7 +144,30 @@ uint8_t pred_tournament(uint32_t pc){
 }
 
 uint8_t pred_custom(uint32_t pc){
-  return TAKEN;
+  uint32_t dir_idx = (bimodeHistory ^ pc) & ((1 << pcIndexBits) - 1);
+  if (directionBHT2[dir_idx] == ST || directionBHT2[dir_idx] == WT){
+    pred2 = TAKEN;
+  } else{
+    pred2 = NOTTAKEN;
+  }
+  if (directionBHT1[dir_idx] == ST || directionBHT1[dir_idx] == WT){
+    pred1 = TAKEN;
+  } else{
+    pred1 = NOTTAKEN;
+  }
+
+  uint32_t choice_idx = pc & ((1 << choiceBits) - 1);
+  if (choiceTable[choice_idx] == 0 || choiceTable[choice_idx] == 1){
+    // choose directionBHT 1
+    choosed = 1;
+    return pred1;
+  } 
+  else{
+    // choose directionBHT 2
+    choosed = 2;
+    return pred2;
+  }
+  
 }
 
 uint8_t make_prediction(uint32_t pc){
@@ -209,7 +246,46 @@ void train_tournament(uint32_t pc, uint8_t outcome){
 }
 
 void train_custom(uint32_t pc, uint8_t outcome){
-  return;
+  // direction predictors
+  uint32_t dir_idx = (bimodeHistory ^ pc) & ((1 << pcIndexBits) - 1);
+  uint8_t pred, oppositePred;
+  if (choosed == 1){
+    pred = pred1;
+    oppositePred = pred2;
+    if (outcome == TAKEN && directionBHT1[dir_idx] != 3){
+      directionBHT1[dir_idx] += 1;
+    }
+    else if (outcome == NOTTAKEN && directionBHT1[dir_idx] != 0){
+      directionBHT1[dir_idx] -= 1;
+    }
+  } else{
+    pred = pred2;
+    oppositePred = pred1;
+    if (outcome == TAKEN && directionBHT2[dir_idx] != 3){
+      directionBHT2[dir_idx] += 1;
+    }
+    else if (outcome == NOTTAKEN && directionBHT2[dir_idx] != 0){
+      directionBHT2[dir_idx] -= 1;
+    }
+  }
+
+  // choice predictor
+  uint32_t choice_idx = pc & ((1 << choiceBits) - 1);
+  if (pred != outcome && oppositePred == outcome){
+    if (choosed == 1){ 
+      // 1 wrong but 2 correct
+      choiceTable[choice_idx] += 1;
+      if (choiceTable[choice_idx] > 3) choiceTable[choice_idx] = 3;
+    } else{
+      // 2 wrong but 1 correct
+      choiceTable[choice_idx] -= 1;
+      if (choiceTable[choice_idx] < 0) choiceTable[choice_idx] = 0;
+    }
+  }
+
+
+  bimodeHistory <<= 1;
+  bimodeHistory |= outcome;
 }
 
 void train_predictor(uint32_t pc, uint8_t outcome){
